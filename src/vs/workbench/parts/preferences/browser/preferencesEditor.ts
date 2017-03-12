@@ -124,7 +124,7 @@ export class PreferencesEditor extends BaseEditor {
 
 		this.searchWidget = this._register(this.instantiationService.createInstance(SearchWidget, this.headerContainer));
 		this._register(this.searchWidget.onDidChange(value => this.filterPreferences(value.trim())));
-		this._register(this.searchWidget.onEnter(value => this.preferencesRenderers.focusNextPreference()));
+		this._register(this.searchWidget.onEnter(value => this.preferencesRenderers.focusNextPreference(value)));
 
 		this.settingsTabsWidget = this._register(this.instantiationService.createInstance(SettingsTabsWidget, this.headerContainer));
 		this._register(this.settingsTabsWidget.onSwitch(() => this.switchSettings()));
@@ -265,8 +265,8 @@ class PreferencesRenderers extends Disposable {
 		return this._getCount(filterResult ? filterResult.filteredGroups : (this._defaultPreferencesRenderer ? (<ISettingsEditorModel>this._defaultPreferencesRenderer.preferencesModel).settingsGroups : []));
 	}
 
-	public focusNextPreference() {
-		const setting = this._defaultPreferencesRenderer.iterator.next();
+	public focusNextPreference(backward?: boolean) {
+		const setting = backward ? this._defaultPreferencesRenderer.iterator.previous() : this._defaultPreferencesRenderer.iterator.next();
 		this._focusPreference(setting, this._defaultPreferencesRenderer);
 		this._focusPreference(setting, this._editablePreferencesRenderer);
 	}
@@ -630,7 +630,7 @@ export class SettingsEditorContribution extends PreferencesEditorContribution<IS
 			});
 	}
 }
-
+// TODO: bookmark
 class StartSearchDefaultSettingsCommand extends Command {
 
 	public runCommand(accessor: ServicesAccessor, args: any): void {
@@ -648,7 +648,7 @@ class StartSearchDefaultSettingsCommand extends Command {
 		return null;
 	}
 }
-
+// TODO: bookmark
 CommonEditorRegistry.registerEditorCommand(new StartSearchDefaultSettingsCommand({
 	id: SETTINGS_EDITOR_COMMAND_SEARCH,
 	precondition: ContextKeyExpr.and(CONTEXT_SETTINGS_EDITOR),

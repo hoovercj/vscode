@@ -22,7 +22,25 @@ import { IWorkbenchThemeService } from 'vs/workbench/services/themes/common/them
 import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { ITextModelResolverService, ITextEditorModel } from 'vs/editor/common/services/resolverService';
 
+// TODO: does this need moved to an html search widget?
+import { SearchWidget } from 'vs/workbench/parts/preferences/browser/preferencesWidgets';
+import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
+import { CommonEditorRegistry, Command } from 'vs/editor/common/editorCommonExtensions';
+import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { ContextKeyExpr, IContextKey, RawContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
+import { KeyMod, KeyCode } from 'vs/base/common/keyCodes';
+import { IContextViewService, IContextMenuService } from 'vs/platform/contextview/browser/contextView';
+
+
 import Webview from './webview';
+
+// --- Register Context Keys
+
+/**  A context key that is set when an html preview has focus. */
+export const KEYBINDING_CONTEXT_HTML_PREVIEW_FOCUS = new RawContextKey<boolean>('htmlPreviewFocus', undefined);
+/**  A context key that is set when an html preview does not have focus. */
+export const KEYBINDING_CONTEXT_HTML_PREVIEW_NOT_FOCUSED: ContextKeyExpr = KEYBINDING_CONTEXT_HTML_PREVIEW_FOCUS.toNegated();
+
 
 /**
  * An implementation of editor for showing HTML content in an IFrame by leveraging the HTML input.
@@ -37,6 +55,9 @@ export class HtmlPreviewPart extends BaseEditor {
 	private _webview: Webview;
 	private _webviewDisposables: IDisposable[];
 	private _container: HTMLDivElement;
+	// private headerContainer: HTMLElement;
+	private searchWidget: HtmlPreviewSearchWidget;
+	private _htmlPreviewFocusContexKey: IContextKey<boolean>;
 
 	private _baseUrl: URI;
 
@@ -50,7 +71,9 @@ export class HtmlPreviewPart extends BaseEditor {
 		@ITextModelResolverService textModelResolverService: ITextModelResolverService,
 		@IWorkbenchThemeService themeService: IWorkbenchThemeService,
 		@IOpenerService openerService: IOpenerService,
-		@IWorkspaceContextService contextService: IWorkspaceContextService
+		@IWorkspaceContextService contextService: IWorkspaceContextService,
+		@IInstantiationService private instantiationService: IInstantiationService,
+		@IContextKeyService private _contextKeyService: IContextKeyService
 	) {
 		super(HtmlPreviewPart.ID, telemetryService);
 
@@ -58,6 +81,8 @@ export class HtmlPreviewPart extends BaseEditor {
 		this._themeService = themeService;
 		this._openerService = openerService;
 		this._baseUrl = contextService.toResource('/');
+
+		this._htmlPreviewFocusContexKey = KEYBINDING_CONTEXT_HTML_PREVIEW_FOCUS.bindTo(this._contextKeyService);
 	}
 
 	dispose(): void {
@@ -79,11 +104,14 @@ export class HtmlPreviewPart extends BaseEditor {
 		this._container.style.position = 'absolute';
 		this._container.style.zIndex = '300';
 		parent.getHTMLElement().appendChild(this._container);
+		this.searchWidget = this._register(this.instantiationService.createInstance(HtmlPreviewSearchWidget, this._container));
+		this._register(this.searchWidget.onDidChange(value => this.search(value)));
+		this._register(this.searchWidget.onEnter(backward => this.search(this.searchWidget.value(), true, !backward)));
 	}
 
 	private get webview(): Webview {
 		if (!this._webview) {
-			this._webview = new Webview(this._container, document.querySelector('.monaco-editor-background'));
+			this._webview = new Webview(this._container, document.querySelector('.monaco-editor-background'), this._htmlPreviewFocusContexKey);
 			this._webview.baseUrl = this._baseUrl && this._baseUrl.toString(true);
 
 			this._webviewDisposables = [
@@ -120,7 +148,10 @@ export class HtmlPreviewPart extends BaseEditor {
 			this.webview.style(this._themeService.getColorTheme());
 
 			if (this._hasValidModel()) {
-				this._modelChangeSubscription = this.model.onDidChangeContent(() => this.webview.contents = this.model.getLinesContent());
+				this._modelChangeSubscription = this.model.onDidChangeContent(() => {
+					this.webview.contents = this.model.getLinesContent();
+					this.search(this.searchWidget.value());
+				});
 				this.webview.contents = this.model.getLinesContent();
 			}
 		}
@@ -139,6 +170,11 @@ export class HtmlPreviewPart extends BaseEditor {
 
 	public focus(): void {
 		this.webview.focus();
+	}
+
+	public focusSearch(): void {
+		this.searchWidget.domNode.style.display = 'block';
+		this.searchWidget.focus();
 	}
 
 	public clearInput(): void {
@@ -190,5 +226,51 @@ export class HtmlPreviewPart extends BaseEditor {
 				return undefined;
 			});
 		});
+	}
+
+	private search(value: string, findNext?: boolean, forward?: boolean) {
+		this.webview.search(value, { findNext, forward });
+	}
+}
+
+class StartSearchHtmlPreviewPartCommand extends Command {
+
+	public runCommand(accessor: ServicesAccessor, args: any): void {
+		const htmlPreviewPart = this.getHtmlPreviewPart(accessor);
+		if (htmlPreviewPart) {
+			htmlPreviewPart.focusSearch();
+		}
+	}
+
+	private getHtmlPreviewPart(accessor: ServicesAccessor): HtmlPreviewPart {
+		const activeEditor = accessor.get(IWorkbenchEditorService).getActiveEditor();
+		if (activeEditor instanceof HtmlPreviewPart) {
+			return activeEditor;
+		}
+		return null;
+	}
+}
+CommonEditorRegistry.registerEditorCommand(new StartSearchHtmlPreviewPartCommand({
+	id: 'htmlPreview.action.search',
+	precondition: ContextKeyExpr.and(KEYBINDING_CONTEXT_HTML_PREVIEW_FOCUS),
+	kbOpts: { primary: KeyMod.CtrlCmd | KeyCode.KEY_F }
+}));
+
+
+export class HtmlPreviewSearchWidget extends SearchWidget {
+
+	constructor(parent: HTMLElement,
+		contextViewService: IContextViewService,
+		contextMenuService: IContextMenuService,
+		instantiationService: IInstantiationService
+	) {
+		super(parent, contextViewService, contextMenuService, instantiationService);
+		this.domNode.style.display = 'none';
+	}
+
+	public clear() {
+		super.clear();
+		this.domNode.style.display = 'none';
+		this.domNode.parentElement.focus();
 	}
 }

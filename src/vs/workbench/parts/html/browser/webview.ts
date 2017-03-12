@@ -15,6 +15,9 @@ import { CommandsRegistry } from 'vs/platform/commands/common/commands';
 import { MenuRegistry } from 'vs/platform/actions/common/actions';
 import { IColorTheme } from 'vs/workbench/services/themes/common/themeService';
 
+import { IContextKey } from 'vs/platform/contextkey/common/contextkey';
+
+
 declare interface WebviewElement extends HTMLElement {
 	src: string;
 	autoSize: 'on';
@@ -22,6 +25,22 @@ declare interface WebviewElement extends HTMLElement {
 
 	send(channel: string, ...args: any[]);
 	openDevTools(): any;
+	findInPage(value: string, options?: WebviewElementFindInPageOptions);
+	stopFindInPage(action: string);
+}
+
+export class StopFindInPageActions {
+	static clearSelection = 'clearSelection';
+	static keepSelection = 'keepSelection';
+	static activateSelection = 'activateSelection';
+}
+
+export interface WebviewElementFindInPageOptions {
+	forward?: boolean;
+	findNext?: boolean;
+	matchCase?: boolean;
+	wordStart?: boolean;
+	medialCapitalAsWordStart?: boolean;
 }
 
 CommandsRegistry.registerCommand('_webview.openDevTools', function () {
@@ -50,7 +69,7 @@ export default class Webview {
 	private _onDidClickLink = new Emitter<URI>();
 	private _onDidLoadContent = new Emitter<{ stats: any }>();
 
-	constructor(parent: HTMLElement, private _styleElement: Element) {
+	constructor(parent: HTMLElement, private _styleElement: Element, private htmlPreviewFocusContexKey?: IContextKey<boolean>) {
 		this._webview = <any>document.createElement('webview');
 
 		this._webview.style.width = '100%';
@@ -95,7 +114,17 @@ export default class Webview {
 					this._onDidLoadContent.fire({ stats });
 					return;
 				}
-			})
+			}),
+ 			addDisposableListener(this._webview, 'focus', (event: KeyboardEvent) => {
+ 				if (this.htmlPreviewFocusContexKey) {
+ 					this.htmlPreviewFocusContexKey.set(true);
+ 				}
+ 			}),
+ 			addDisposableListener(this._webview, 'blur', (event: KeyboardEvent) => {
+ 				if (this.htmlPreviewFocusContexKey) {
+ 					this.htmlPreviewFocusContexKey.reset();
+ 				}
+			 })
 		];
 
 		if (parent) {
@@ -142,6 +171,14 @@ export default class Webview {
 
 	public sendMessage(data: any): void {
 		this._send('message', data);
+	}
+
+	public search(value: string, options?: WebviewElementFindInPageOptions): void {
+		if (value) {
+			this._webview.findInPage(value, options);
+		} else {
+			this._webview.stopFindInPage(StopFindInPageActions.clearSelection);
+		}
 	}
 
 	style(theme: IColorTheme): void {
